@@ -1,6 +1,9 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from datetime import datetime
 import requests
+import firebase_admin
+from firebase_admin import firestore
 # import json
 
 # == CONSTANTS ==
@@ -9,6 +12,9 @@ BULK_DATA_ENDPOINT = "https://api.scryfall.com/bulk-data/default-cards"
 BULK_DATA_DOWNLOAD_URI_KEY = "download_uri"
 BULK_DATA_UPDATED_AT_KEY = "updated_at"
 
+DATABASE_WRITE_LIMIT = 19000
+COLLECTION_CARD_BACKUPS = "card_backups"
+
 # == CONSTANTS END ==
 
 
@@ -16,6 +22,7 @@ BULK_DATA_UPDATED_AT_KEY = "updated_at"
 
 @dataclass(frozen=True)
 class BulkDataResponse:
+    timestamp: str
     updated_at: str
     data: list[dict]
 
@@ -78,30 +85,37 @@ class Card:
         
         return Card(name, cmc, mana_cost, colors, types, creature_types, sets, power, toughness)
 
+    def to_dict(self: Card) -> dict:
+        return {
+            "name": self.name,
+            "cmc": self.cmc,
+            "mana_cost": self.mana_cost,
+            "colors": self.colors,
+            "type": self.type,
+            "creature_type": self.creature_type,
+            "sets": self.sets,
+            "power": self.power,
+            "toughness": self.toughness
+            }
 
 # == DATA CLASSES END ==
 
 
 def main():
     print("hello")
+    db_client = init_firebase()
     bulk_data_response: BulkDataResponse = fetch_data()
-    cards: dict = process_data(bulk_data_response.data)
-    print(list(cards.items())[:30])
+    cards: list[Card] = process_data(bulk_data_response.data)
+    if len(cards) < DATABASE_WRITE_LIMIT:
+        send_data(db_client, bulk_data_response.timestamp, bulk_data_response.updated_at, cards)
     return
 
-# # TODO: delete this test method
-# def main():
-#     print("hello")
-#     # bulk_data_response: BulkDataResponse = fetch_data()
-#     with open('mtg-cotd/test_cards.json') as json_file:
-#         test: dict = json.load(json_file)  
-#         cards: dict = process_data(test)
-#         print(len(cards))
-#         print(list(cards.items())[:10])
-#     return
+def init_firebase() -> any:
+    firebase_admin.initialize_app()
+    return firestore.client()
 
 
-def process_data(data: list[dict]) -> dict:
+def process_data(data: list[dict]) -> list[Card]:
     cards: dict = {}
 
     for card_data in data:
@@ -115,7 +129,7 @@ def process_data(data: list[dict]) -> dict:
         except:
             continue
 
-    return cards
+    return list(cards.values())
 
 
 def fetch_data() -> BulkDataResponse:
@@ -133,7 +147,18 @@ def fetch_data() -> BulkDataResponse:
 
     data: list[dict] = data_response.json()
 
-    return BulkDataResponse(updated_at, data)
+    return BulkDataResponse(datetime.now(), updated_at, data)
+
+def send_data(db, timestamp: str, updated_at: str, cards: list[Card]):
+    collection = db.collection(COLLECTION_CARD_BACKUPS)
+    collection.add(
+        {
+            "timestamp": timestamp,
+            "updated_at": updated_at,
+            "card1"
+            "cards": list(map(lambda card: card.to_dict(), cards))
+        }
+    )
 
 
 
