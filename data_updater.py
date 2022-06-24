@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from typing import NoReturn
 from dateutil import parser
 import requests
 import firebase_admin
@@ -17,6 +18,7 @@ BULK_DATA_UPDATED_AT_KEY = "updated_at"
 # FIREBASE
 DATABASE_BATCH_LIMIT = 500
 DATABASE_WRITE_LIMIT = 19000
+DATABASE_DELETE_LIMIT = 19000
 COLLECTION_BACKUPS = "backups"
 COLLECTION_CARDS = "cards"
 
@@ -111,11 +113,12 @@ class Card:
 def main():
     print("hello")
     db_client = init_firebase()
-    bulk_data_response: BulkDataResponse = fetch_data()
-    cards: list[Card] = process_data(bulk_data_response.data)
-    if len(cards) < DATABASE_WRITE_LIMIT:
-        send_data(db_client, bulk_data_response.timestamp,
-                  bulk_data_response.updated_at, cards)
+    delete_data(db_client)
+    # bulk_data_response: BulkDataResponse = fetch_data()
+    # cards: list[Card] = process_data(bulk_data_response.data)
+    # if len(cards) < DATABASE_WRITE_LIMIT:
+    #     send_data(db_client, bulk_data_response.timestamp,
+    #               bulk_data_response.updated_at, cards)
     return
 
 
@@ -160,7 +163,7 @@ def fetch_data() -> BulkDataResponse:
     return BulkDataResponse(datetime.now(timezone.utc), updated_at, data)
 
 
-def send_data(db, timestamp: datetime, updated_at: datetime, cards: list[Card]):
+def send_data(db, timestamp: datetime, updated_at: datetime, cards: list[Card]) -> NoReturn:
     backups_collection = db.collection(COLLECTION_BACKUPS)
     backup_response_ref = backups_collection.document()
     backup_response_ref.set({
@@ -180,6 +183,20 @@ def send_data(db, timestamp: datetime, updated_at: datetime, cards: list[Card]):
     if idx % DATABASE_BATCH_LIMIT != 0:
         batch.commit()
 
+def delete_data(db) -> NoReturn:
+    backups_collection = db.collection(COLLECTION_BACKUPS)
+    backup_docs = backups_collection.order_by("timestamp", direction=firestore.Query.DESCENDING).get()
+
+    # Create dict and add from for loop below
+
+    if len(backup_docs) > 2:
+        for backup_doc in backup_docs[2:]:
+            backups_collection.document(backup_doc.id).delete()
+
+    # Delete cards accord
+    # Keep in mind delete limit and batch size
+
+    return
 
 if __name__ == "__main__":
     main()
