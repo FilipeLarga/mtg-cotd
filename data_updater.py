@@ -40,7 +40,9 @@ class Card:
     toughness: int
 
     def add_set(self, sets: list[str]) -> None:
-        self.sets.append(*sets)
+        for set in sets:
+            if set not in self.sets:
+                self.sets.append(set)
 
     @classmethod
     def from_json(cls: Card, card_json: dict) -> Card:
