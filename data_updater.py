@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timezone
+from dateutil import parser
 import requests
 import firebase_admin
 from firebase_admin import firestore
@@ -8,12 +9,16 @@ from firebase_admin import firestore
 
 # == CONSTANTS ==
 
+# SCRYFALL
 BULK_DATA_ENDPOINT = "https://api.scryfall.com/bulk-data/default-cards"
 BULK_DATA_DOWNLOAD_URI_KEY = "download_uri"
 BULK_DATA_UPDATED_AT_KEY = "updated_at"
 
+# FIREBASE
+DATABASE_BATCH_LIMIT = 500
 DATABASE_WRITE_LIMIT = 19000
-COLLECTION_CARD_BACKUPS = "card_backups"
+COLLECTION_BACKUPS = "backups"
+COLLECTION_CARDS = "cards"
 
 # == CONSTANTS END ==
 
@@ -22,8 +27,8 @@ COLLECTION_CARD_BACKUPS = "card_backups"
 
 @dataclass(frozen=True)
 class BulkDataResponse:
-    timestamp: str
-    updated_at: str
+    timestamp: datetime
+    updated_at: datetime
     data: list[dict]
 
 
@@ -55,7 +60,7 @@ class Card:
 
         original_cost: str = card_json["mana_cost"]
         mana_cost: list[str] = original_cost.replace("{", "").split("}")[:-1]
-        
+
         colors: list[str] = card_json["colors"]
 
         original_type: str = card_json["type_line"]
@@ -84,7 +89,7 @@ class Card:
         power = card_json["power"]
 
         toughness = card_json["toughness"]
-        
+
         return Card(name, cmc, mana_cost, colors, types, creature_types, sets, power, toughness)
 
     def to_dict(self: Card) -> dict:
@@ -98,7 +103,7 @@ class Card:
             "sets": self.sets,
             "power": self.power,
             "toughness": self.toughness
-            }
+        }
 
 # == DATA CLASSES END ==
 
@@ -109,8 +114,10 @@ def main():
     bulk_data_response: BulkDataResponse = fetch_data()
     cards: list[Card] = process_data(bulk_data_response.data)
     if len(cards) < DATABASE_WRITE_LIMIT:
-        send_data(db_client, bulk_data_response.timestamp, bulk_data_response.updated_at, cards)
+        send_data(db_client, bulk_data_response.timestamp,
+                  bulk_data_response.updated_at, cards)
     return
+
 
 def init_firebase() -> any:
     firebase_admin.initialize_app()
@@ -140,7 +147,8 @@ def fetch_data() -> BulkDataResponse:
         raise Exception(f"Error fetching bulk data at {BULK_DATA_ENDPOINT}")
 
     response_json: dict = response.json()
-    updated_at: str = response_json[BULK_DATA_UPDATED_AT_KEY]
+    updated_at: datetime = parser.parse(
+        response_json[BULK_DATA_UPDATED_AT_KEY]).astimezone(timezone.utc)
     download_uri: str = response_json[BULK_DATA_DOWNLOAD_URI_KEY]
 
     data_response = requests.get(download_uri)
@@ -149,19 +157,28 @@ def fetch_data() -> BulkDataResponse:
 
     data: list[dict] = data_response.json()
 
-    return BulkDataResponse(datetime.now(), updated_at, data)
+    return BulkDataResponse(datetime.now(timezone.utc), updated_at, data)
 
-def send_data(db, timestamp: str, updated_at: str, cards: list[Card]):
-    collection = db.collection(COLLECTION_CARD_BACKUPS)
-    collection.add(
-        {
-            "timestamp": timestamp,
-            "updated_at": updated_at,
-            "card1"
-            "cards": list(map(lambda card: card.to_dict(), cards))
-        }
-    )
 
+def send_data(db, timestamp: datetime, updated_at: datetime, cards: list[Card]):
+    backups_collection = db.collection(COLLECTION_BACKUPS)
+    backup_response_ref = backups_collection.document()
+    backup_response_ref.set({
+        "timestamp": timestamp,
+        "updated_at": updated_at
+    })
+
+    cards_collection = db.collection(COLLECTION_CARDS)
+    batch = db.batch()
+    for idx, card in enumerate(cards):
+        card_ref = cards_collection.document()
+        batch.set(
+            card_ref, {"backup_id": backup_response_ref.id, **card.to_dict()})
+        if idx % DATABASE_BATCH_LIMIT == 0:
+            batch.commit()
+
+    if idx % DATABASE_BATCH_LIMIT != 0:
+        batch.commit()
 
 
 if __name__ == "__main__":
